@@ -1,0 +1,295 @@
+---
+title: "PHC 6064 Final Project"
+author: "Dylan Severin"
+date: "2023-12-05"
+format: html
+pagestyle: headings
+geometry: 
+  - top=30mm
+  - bottom=30mm
+  - left=20mm
+  - right=20mm
+  - heightrounded
+mainfont: "Calibri"
+monofont: "Lucida Console"
+fontsize: 10pt
+knitr:
+  opts_chunk:      ####### set global options ########
+    collapse: true # keep code from blocks together (if shown)
+    echo: true   # don't show code
+    code-fold: false
+    message: false  # show messages
+    warning: false  # show warnings
+    error: false    # show error messages
+---
+
+```{r}
+#| label: packages
+
+library(geepack)
+library(pstools)
+library(lmerTest)
+library(readxl)
+library(table1)
+library(gtsummary)
+library(tidyverse)
+```
+
+```{r}
+#| label: packages-cleaning
+#| echo: false
+
+mal_number <- 
+  read_csv("data/child-deaths-from-malaria-number.csv") %>% 
+  select(country = Entity, year = Year, mal_mort = starts_with("Deaths")) %>% 
+  filter(!country %in% c("African Region (WHO)",
+                         "American Samoa",
+                         "East Asia & Pacific (WB)",
+                         "Eastern Mediterranean Region (WHO)",
+                         "England",
+                         "Europe & Central Asia (WB)",
+                         "European Region (WHO)",
+                         "G20",
+                         "Guam",
+                         "Latin America & Caribbean (WB)",
+                         "Middle East & North Africa (WB)",
+                         "North America (WB)",
+                         "Northern Ireland",
+                         "OECD Countries",
+                         "Region of the Americas (WHO)",
+                         "Scotland",
+                         "South Asia (WB)",
+                         "South-East Asia Region (WHO)",
+                         "Sub-Saharan Africa (WB)",
+                         "United States Virgin Islands",
+                         "Wales",
+                         "Western Pacific Region (WHO)",
+                         "World",
+                         "World Bank High Income",
+                         "World Bank Low Income",
+                         "World Bank Lower Middle Income",
+                         "World Bank Upper Middle Income")) %>% 
+  mutate(country = case_when(
+    country == "Cote d'Ivoire" ~ "Côte d'Ivoire",
+    country == "Timor" ~ "Timor-Leste",
+    country == "Democratic Republic of Congo" ~ "Democratic Republic of the Congo",
+    country == "Micronesia (country)" ~ "Micronesia",
+    .default = country
+  ))
+
+net <- 
+  read_csv("data/children-sleeping-under-treated-bednet.csv") %>% 
+  select(country = Entity, year = Year, net_prc = starts_with("Use")) %>% 
+  mutate(country = case_when(
+    country == "Cape Verde" ~ "Cabo Verde",
+    country == "Cote d'Ivoire" ~ "Côte d'Ivoire",
+    country == "Democratic Republic of Congo" ~ "Democratic Republic of the Congo",
+    country == "Timor" ~ "Timor-Leste",
+    country == "United States" ~ "United States of America",
+    .default = country
+  ))
+
+water <- 
+  read_csv("data/water-and-sanitation.csv") %>% 
+  select(
+    drink_prc = "Access to improved drinking water", 
+    sanitation_prc = "Access to improved sanitation", 
+    country = Entity, year = Year
+  ) %>% 
+  mutate(country = case_when(
+    country == "Cape Verde" ~ "Cabo Verde",
+    country == "Cote d'Ivoire" ~ "Côte d'Ivoire",
+    country == "Democratic Republic of Congo" ~ "Democratic Republic of the Congo",
+    country == "Timor" ~ "Timor-Leste",
+    country == "United States" ~ "United States of America",
+    .default = country
+  ))    
+
+pop <- 
+  read_xlsx(
+    "data/WPP2022_GEN_F01_DEMOGRAPHIC_INDICATORS_COMPACT_REV1.xlsx", 
+    sheet = 1, skip = 16, guess_max = 2000
+  ) %>% 
+  filter(Type %in% c("Country/Area", "Region")) %>% 
+  select(
+    country = "Region, subregion, country or area *", 
+    year = Year, 
+    total_pop = "Total Population, as of 1 July (thousands)", 
+    child_mort = "Under-Five Deaths, under age 5 (thousands)"
+  ) %>% 
+  mutate(
+    total_pop = as.numeric(total_pop) / 1000,
+    child_mort = round(as.numeric(child_mort) * 1000, 3)
+  ) %>% 
+  filter(year >= 1990) %>% 
+  mutate(country = case_when(
+    country == "United Republic of Tanzania" ~ "Tanzania",
+    country == "Viet Nam" ~ "Vietnam",
+    country == "State of Palestine" ~ "Palestine",
+    country == "Russian Federation" ~ "Russia",
+    country == "Syrian Arab Republic" ~ "Syria",
+    country == "Brunei Darussalam" ~ "Brunei",
+    country == "Republic of Moldova" ~ "Moldova",
+    country == "Türkiye" ~ "Turkey",
+    country == "China, Hong Kong SAR" ~ "Hong Kong",
+    country == "Lao People's Democratic Republic" ~ "Laos",
+    country == "Dem. People's Republic of Korea" ~ "North Korea",
+    country == "Republic of Korea" ~ "South Korea",
+    country == "Venezuela (Bolivarian Republic of)" ~ "Venezuela",
+    country == "Bolivia (Plurinational State of)" ~ "Bolivia",
+    country == "Iran (Islamic Republic of)" ~ "Iran",
+    country == "China, Macao SAR" ~ "Macau",
+    country == "China, Taiwan Province of China" ~ "Taiwan",
+    country == "Micronesia (Fed. States of)" ~ "Micronesia",
+    .default = country
+  )) %>% 
+  mutate(region = case_when(
+    str_to_upper(country) == country ~ country,
+    .default = NA
+  )) %>% 
+  fill(region) %>% 
+  filter(str_to_upper(country) != country)
+
+malaria <- 
+  left_join(mal_number, pop, by = join_by(country, year)) %>% 
+  left_join(water, by = join_by(country, year)) %>% 
+  left_join(net, by = join_by(country, year)) %>% 
+  filter(year >= 2000, year <= 2019) %>% 
+  mutate(mal_mort_100_000 = mal_mort / (total_pop * 10)) %>% 
+  filter(!is.na(mal_mort_100_000), !country == "Puerto Rico") %>% 
+  mutate(region = as.character(region))
+
+```
+
+```{r}
+#| label: data-exploration
+
+label(malaria$total_pop) <- "Total population, millions"
+label(malaria$region) <- "World region"
+label(malaria$drink_prc) <- "Access to improved drinking water, %"
+label(malaria$sanitation_prc) <- "Access to improved sanitation, %"
+label(malaria$net_prc) <- "Treated bed net usage, %"
+label(malaria$mal_mort_100_000) <- "Child mortality to malaria, rate per 100,000"
+
+# summary stats for year 2018
+table1(
+  ~ total_pop + drink_prc + sanitation_prc + 
+    net_prc + mal_mort_100_000, 
+  data = malaria %>% filter(year == 2018)
+)
+
+ggplot(malaria) +
+  aes(x = year, y = mal_mort_100_000, group = country, color = region) +
+  geom_line() +
+  facet_wrap(~ region) +
+  theme(legend.position="none") + 
+  labs(
+    x = "Year",
+    y = "Child mortality to malaria, rate per 100,000",
+    title = "Child mortality to malaria declining",
+    subtitle = "mostly present in Africa"
+  )
+
+```
+
+```{r}
+#| label: marginal-models
+
+# Total main effects - subset 1 
+mal_marg1 <-   
+  malaria %>% 
+  filter(
+    !is.na(drink_prc), 
+    !is.na(net_prc),
+    !is.na(sanitation_prc),
+    !is.na(total_pop)
+  ) %>% 
+  mutate(year = year - min(year))
+
+marg_fit1 <- 
+  geeglm(
+    mal_mort_100_000 ~ year + total_pop + drink_prc + sanitation_prc + net_prc + region, 
+    id = factor(country), 
+    data = mal_marg1
+  )
+
+marg_fit1 %>% 
+  tbl_regression(intercept = TRUE) %>%
+  bold_p() %>% 
+  modify_caption("Total marginal regression results")
+
+anova(marg_fit1) # "ANOVA table for total model"
+
+marg_fit2 <- update(marg_fit1, corstr = "ar1")
+marg_fit2_1 <- update(marg_fit1, corstr = "exchangeable")
+
+map_dbl(list(marg_fit1, marg_fit2, marg_fit2_1), \(x) QIC(x)[[1]]) %>%
+  as_tibble() %>% 
+  cbind(`Correlation structure` = c("Independence", "Autoregressive", "Exchangeable"), .) %>% 
+  gt::gt()
+
+# subset 2
+mal_marg2 <-   
+  malaria %>% 
+  filter(
+    !is.na(drink_prc), 
+    !is.na(sanitation_prc)
+  ) %>% 
+  mutate(year = year - min(year))
+
+marg_fit3 <- 
+  geeglm(
+    mal_mort_100_000 ~ year + drink_prc + sanitation_prc + region, 
+    id = factor(country), 
+    data = mal_marg2
+  )
+
+marg_fit3 %>% 
+  tbl_regression(intercept = TRUE) %>%
+  bold_p() %>% 
+  modify_caption("Reduced marginal regression results")
+
+anova(marg_fit3) # "ANOVA table for reduced model"
+
+QIC(marg_fit1) # still a better fit
+QIC(marg_fit3)
+
+# 2-way interactions
+marg_fit4 <- 
+  geeglm(
+    mal_mort_100_000 ~ (year + drink_prc + sanitation_prc + region)^2, 
+    id = factor(country), 
+    data = mal_marg2
+  )
+
+marg_fit4 %>% 
+  tbl_regression() %>%
+  bold_p() %>% 
+  modify_caption("Marginal regression with interactions results")
+
+anova(marg_fit4) # "ANOVA table for interaction model"
+
+mal_marg3 <-    
+  malaria %>% 
+  filter(
+    !is.na(drink_prc), 
+    !is.na(sanitation_prc)
+  ) %>%
+  filter(region == "AFRICA") %>% 
+  mutate(year = year - min(year))
+
+marg_fit5 <- 
+  geeglm(
+    mal_mort_100_000 ~ year  + drink_prc + sanitation_prc, 
+    id = factor(country), 
+    data = mal_marg3
+  )
+
+marg_fit5 %>% 
+  tbl_regression(intercept = TRUE) %>%
+  bold_p() %>% 
+  modify_caption("Regression results (Africa only)")
+
+```
+
+
